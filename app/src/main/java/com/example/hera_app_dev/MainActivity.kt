@@ -109,7 +109,7 @@ class MainActivity : ComponentActivity() {
 
     private var packetFileStream: FileOutputStream? = null
     private var micFileStream: FileOutputStream? = null
-    private val decodeQueue = LinkedBlockingQueue<ByteArray>(500)
+    private val decodeQueue = LinkedBlockingQueue<ByteArray>(AE04_DECODE_QUEUE_LIMIT)
     private var decodeThread: Thread? = null
     private var audioTrack: AudioTrack? = null
     private var opusDecoder: OpusDecoder? = null
@@ -887,17 +887,11 @@ class MainActivity : ComponentActivity() {
         if (!isAllZero(micFrame)) {
             nonZeroMicPacketCount++
         }
-        var decodeFrame = micFrame
         if (isFullPacket && packet.size >= (1 + AE04_MIC_FRAME_SIZE + AE04_DEC_FRAME_SIZE)) {
             val decFrame = packet.copyOfRange(1 + AE04_MIC_FRAME_SIZE, 1 + AE04_MIC_FRAME_SIZE + AE04_DEC_FRAME_SIZE)
-            val micIsZero = isAllZero(micFrame)
             val decIsZero = isAllZero(decFrame)
             if (!decIsZero) {
                 nonZeroDecPacketCount++
-            }
-            if (micIsZero && !decIsZero) {
-                decodeFrame = decFrame
-                decodeUseDecFallbackCount++
             }
             if (notifyPacketCount % 500L == 0L) {
                 appendLog("Frame stat micNZ=$nonZeroMicPacketCount decNZ=$nonZeroDecPacketCount decFallback=$decodeUseDecFallbackCount")
@@ -911,8 +905,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (decodeEnabled) {
-            if (!decodeQueue.offer(decodeFrame)) {
-                decodeErrorCount++
+            while (decodeQueue.size >= AE04_DECODE_QUEUE_TARGET) {
+                decodeQueue.poll()
+            }
+            if (!decodeQueue.offer(micFrame)) {
+                decodeQueue.poll()
+                decodeQueue.offer(micFrame)
             }
         }
     }
@@ -1008,6 +1006,8 @@ class MainActivity : ComponentActivity() {
         private const val AE04_PACKET_SIZE_FULL = 84
         private const val AE04_MIC_FRAME_SIZE = 40
         private const val AE04_DEC_FRAME_SIZE = 40
+        private const val AE04_DECODE_QUEUE_LIMIT = 12
+        private const val AE04_DECODE_QUEUE_TARGET = 6
         private const val AE04_SEQ_INDEX_FULL = 81
         private const val AE04_MIC_LEN_INDEX_FULL = 82
         private const val AE04_DEC_LEN_INDEX_FULL = 83
