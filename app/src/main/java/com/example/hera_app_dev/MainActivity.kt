@@ -73,6 +73,11 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 
+private enum class PlaybackSource {
+    MIC,
+    PEER
+}
+
 class MainActivity : ComponentActivity() {
     private val logs = mutableStateListOf<String>()
     private var currentGatt: BluetoothGatt? = null
@@ -83,6 +88,7 @@ class MainActivity : ComponentActivity() {
     private var connectionState by mutableStateOf("IDLE")
     private var captureEnabled by mutableStateOf(false)
     private var decodeEnabled by mutableStateOf(false)
+    private var playbackSource by mutableStateOf(PlaybackSource.MIC)
     private var notifyPacketCount by mutableStateOf(0L)
     private var nonZeroMicPacketCount by mutableStateOf(0L)
     private var nonZeroDecPacketCount by mutableStateOf(0L)
@@ -370,7 +376,7 @@ class MainActivity : ComponentActivity() {
             }
 
             Text(
-                "Sub OK/FAIL: $subscribeOkCount/$subscribeFailCount   Len:$lastPacketLen   MIC:$lastMicLen DEC:$lastDecLen   SEQ loss:$seqLossCount",
+                "Sub OK/FAIL: $subscribeOkCount/$subscribeFailCount   Len:$lastPacketLen   MIC:$lastMicLen DEC:$lastDecLen   Play:${playbackSource.name}   SEQ loss:$seqLossCount",
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace
             )
@@ -431,6 +437,28 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Text(if (decodeEnabled) "Stop Decode" else "Start Decode", fontSize = 10.sp)
                 }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = { selectPlaybackSource(PlaybackSource.MIC) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
+                    shape = btnShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (playbackSource == PlaybackSource.MIC) Color(0xFF2D6A4F) else Color(0xFF607D8B)
+                    )
+                ) { Text("Play Mic 1-40", fontSize = 10.sp) }
+                Button(
+                    onClick = { selectPlaybackSource(PlaybackSource.PEER) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp),
+                    shape = btnShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (playbackSource == PlaybackSource.PEER) Color(0xFF2D6A4F) else Color(0xFF607D8B)
+                    )
+                ) { Text("Play Peer 41-80", fontSize = 10.sp) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = {
@@ -887,8 +915,9 @@ class MainActivity : ComponentActivity() {
         if (!isAllZero(micFrame)) {
             nonZeroMicPacketCount++
         }
+        var decFrame: ByteArray? = null
         if (isFullPacket && packet.size >= (1 + AE04_MIC_FRAME_SIZE + AE04_DEC_FRAME_SIZE)) {
-            val decFrame = packet.copyOfRange(1 + AE04_MIC_FRAME_SIZE, 1 + AE04_MIC_FRAME_SIZE + AE04_DEC_FRAME_SIZE)
+            decFrame = packet.copyOfRange(1 + AE04_MIC_FRAME_SIZE, 1 + AE04_MIC_FRAME_SIZE + AE04_DEC_FRAME_SIZE)
             val decIsZero = isAllZero(decFrame)
             if (!decIsZero) {
                 nonZeroDecPacketCount++
@@ -905,13 +934,38 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (decodeEnabled) {
+            val frameToPlay = when (playbackSource) {
+                PlaybackSource.MIC -> micFrame
+                PlaybackSource.PEER -> decFrame
+            } ?: return
+            if (isAllZero(frameToPlay)) {
+                return
+            }
             while (decodeQueue.size >= AE04_DECODE_QUEUE_TARGET) {
                 decodeQueue.poll()
             }
-            if (!decodeQueue.offer(micFrame)) {
+            if (!decodeQueue.offer(frameToPlay)) {
                 decodeQueue.poll()
-                decodeQueue.offer(micFrame)
+                decodeQueue.offer(frameToPlay)
             }
+        }
+    }
+
+    private fun selectPlaybackSource(source: PlaybackSource) {
+        if (playbackSource == source) {
+            return
+        }
+        playbackSource = source
+        decodeQueue.clear()
+        if (decodeEnabled) {
+            try {
+                opusDecoder = OpusDecoder(16000, 1)
+                appendLog("Playback source: ${source.name}")
+            } catch (e: Exception) {
+                appendLog("Switch source failed: ${e.message}")
+            }
+        } else {
+            appendLog("Playback source: ${source.name}")
         }
     }
 
